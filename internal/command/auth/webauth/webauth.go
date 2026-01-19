@@ -21,26 +21,47 @@ import (
 )
 
 func SaveToken(ctx context.Context, token string) error {
-
 	if ac, err := agent.DefaultClient(ctx); err == nil {
 		_ = ac.Kill(ctx)
 	}
+
+	// Get the user info first so we have the email
+	user, err := flyutil.NewClientFromOptions(ctx, fly.ClientOptions{
+		AccessToken: token,
+	}).GetCurrentUser(ctx)
+	if err != nil {
+		return fmt.Errorf("failed retrieving current user: %w", err)
+	}
+
+	configDir := state.ConfigDirectory(ctx)
+	now := time.Now()
+
+	// Save to the multi-account storage
+	af, err := config.LoadAccounts(configDir)
+	if err != nil {
+		return fmt.Errorf("failed loading accounts: %w", err)
+	}
+
+	account := config.Account{
+		Email:       user.Email,
+		AccessToken: token,
+		LastLogin:   now,
+	}
+	af.AddOrUpdateAccount(account)
+
+	if err := config.SaveAccounts(configDir, af); err != nil {
+		return fmt.Errorf("failed saving accounts: %w", err)
+	}
+
+	// Also persist to config.yml for backward compatibility
 	config.Clear(state.ConfigFile(ctx))
 
 	if err := persistAccessToken(ctx, token); err != nil {
 		return err
 	}
 
-	// Record the login timestamp
-	if err := config.SetLastLogin(state.ConfigFile(ctx), time.Now()); err != nil {
+	if err := config.SetLastLogin(state.ConfigFile(ctx), now); err != nil {
 		return fmt.Errorf("failed persisting login timestamp: %w", err)
-	}
-
-	user, err := flyutil.NewClientFromOptions(ctx, fly.ClientOptions{
-		AccessToken: token,
-	}).GetCurrentUser(ctx)
-	if err != nil {
-		return fmt.Errorf("failed retrieving current user: %w", err)
 	}
 
 	io := iostreams.FromContext(ctx)

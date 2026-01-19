@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -30,7 +31,11 @@ To continue interacting with Fly, the user will need to log in again.
 
 func runLogout(ctx context.Context) (err error) {
 	log := logger.FromContext(ctx)
+	io := iostreams.FromContext(ctx)
+	colorize := io.ColorScheme()
+	configDir := state.ConfigDirectory(ctx)
 
+	// Try to revoke the token on the server
 	if c := flyutil.ClientFromContext(ctx); c.Authenticated() {
 		resp, err := gql.LogOut(ctx, c.GenqClient())
 		if err != nil || !resp.LogOut.Ok {
@@ -41,27 +46,59 @@ func runLogout(ctx context.Context) (err error) {
 		}
 	}
 
+	// Kill the agent
 	var ac *agent.Client
 	if ac, err = agent.DefaultClient(ctx); err == nil {
 		if err = ac.Kill(ctx); err != nil {
 			err = fmt.Errorf("failed stopping agent: %w", err)
-
 			return
 		}
 	}
 
+	// Handle multi-account: remove current account and switch to another if available
+	af, loadErr := config.LoadAccounts(configDir)
+	if loadErr == nil && af.HasAccounts() {
+		currentEmail := af.Active
+
+		// Remove the current account
+		if removeErr := af.RemoveAccount(currentEmail); removeErr == nil {
+			// Save the accounts file
+			if saveErr := config.SaveAccounts(configDir, af); saveErr != nil {
+				log.Warnf("Failed to save accounts file: %v", saveErr)
+			}
+
+			if af.HasAccounts() {
+				// Sync the new active account to config.yml
+				if syncErr := config.SyncActiveAccountToConfig(configDir); syncErr != nil {
+					log.Warnf("Failed to sync account config: %v", syncErr)
+				}
+
+				fmt.Fprintf(io.Out, "Logged out of %s\n", colorize.Yellow(currentEmail))
+				fmt.Fprintf(io.Out, "Switched to account: %s\n", colorize.Green(af.Active))
+
+				warnEnvVars(io.ErrOut)
+				return nil
+			}
+		}
+	}
+
+	// No other accounts or couldn't load accounts file - clear everything
 	path := state.ConfigFile(ctx)
 	if err = config.Clear(path); err != nil {
 		err = fmt.Errorf("failed clearing config file at %s: %w\n", path, err)
-
 		return
 	}
 
-	out := iostreams.FromContext(ctx).ErrOut
+	fmt.Fprintln(io.Out, "Logged out successfully.")
+	warnEnvVars(io.ErrOut)
 
+	return
+}
+
+func warnEnvVars(out io.Writer) {
 	single := func(key string) {
 		fmt.Fprintf(out,
-			"$%s is set in your environment; don't forget to remove it.", key)
+			"$%s is set in your environment; don't forget to remove it.\n", key)
 	}
 
 	keyExists := env.IsSet(config.APITokenEnvKey)
@@ -70,13 +107,10 @@ func runLogout(ctx context.Context) (err error) {
 	switch {
 	case keyExists && tokenExists:
 		const msg = "$%s & $%s are set in your environment; don't forget to remove them.\n"
-
 		fmt.Fprintf(out, msg, config.APITokenEnvKey, config.AccessTokenEnvKey)
 	case keyExists:
 		single(config.APITokenEnvKey)
 	case tokenExists:
 		single(config.AccessTokenEnvKey)
 	}
-
-	return
 }

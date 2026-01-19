@@ -26,6 +26,9 @@ If you do have an account, begin with the AUTH LOGIN subcommand.
 		newDocker(),
 		newLogout(),
 		newSignup(),
+		newAccounts(),
+		newSwitch(),
+		newRemove(),
 	)
 
 	return auth
