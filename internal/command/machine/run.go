@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/briandowns/spinner"
+	"github.com/docker/go-units"
 	"github.com/google/shlex"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 	"github.com/spf13/cobra"
 	fly "github.com/superfly/fly-go"
 	"github.com/superfly/flyctl/agent"
+	"github.com/superfly/flyctl/helpers"
 	"github.com/superfly/flyctl/internal/appconfig"
 	"github.com/superfly/flyctl/internal/appsecrets"
 	"github.com/superfly/flyctl/internal/cmdutil"
@@ -148,6 +150,22 @@ var sharedFlags = flag.Set{
 		Description: "Set of secrets to write to the Machine, in the form of /path/inside/machine=SECRET pairs, where SECRET is the name of the secret. The content of the secret must be base64 encoded. Can be specified multiple times.",
 	},
 	flag.VMSizeFlags,
+	flag.String{
+		Name:        "rootfs-persist",
+		Description: "Whether to persist the root filesystem across restarts. Options include 'never', 'always', and 'restart'.",
+	},
+	flag.String{
+		Name:        "rootfs-size",
+		Description: "Root filesystem size in GB. Accepts a plain number (in GB) or a human-readable size (e.g. 2gb, 5gb). Uses an overlayfs to allow the root filesystem to exceed its default size. Set to 0 to unset.",
+	},
+	flag.String{
+		Name:        "rootfs-fs-size",
+		Description: "Root filesystem size in GB. Accepts a plain number (in GB) or a human-readable size (e.g. 2gb, 5gb). Sets the size of the filesystem itself, independent of the rootfs volume size. Set to 0 to unset.",
+	},
+	flag.String{
+		Name:        "swap-size",
+		Description: "Swap size in MB. Accepts a plain number (in MB) or a human-readable size (e.g. 512mb, 1gb).",
+	},
 }
 
 var runOrCreateFlags = flag.Set{
@@ -695,6 +713,67 @@ func determineMachineConfig(
 
 	if len(flag.GetStringArray(ctx, "kernel-arg")) != 0 {
 		machineConf.Guest.KernelArgs = flag.GetStringArray(ctx, "kernel-arg")
+	}
+
+	// Root filesystem persistence and size
+	if flag.IsSpecified(ctx, "rootfs-persist") || flag.IsSpecified(ctx, "rootfs-size") || flag.IsSpecified(ctx, "rootfs-fs-size") {
+		if machineConf.Rootfs == nil {
+			machineConf.Rootfs = &fly.MachineRootfs{}
+		}
+
+		if flag.IsSpecified(ctx, "rootfs-persist") {
+			switch flag.GetString(ctx, "rootfs-persist") {
+			case "never":
+				machineConf.Rootfs.Persist = fly.MachinePersistRootfsNever
+			case "always":
+				machineConf.Rootfs.Persist = fly.MachinePersistRootfsAlways
+			case "restart":
+				machineConf.Rootfs.Persist = fly.MachinePersistRootfsRestart
+			default:
+				return machineConf, fmt.Errorf("invalid rootfs-persist value, must be one of: never, always, restart")
+			}
+		}
+
+		if flag.IsSpecified(ctx, "rootfs-size") {
+			sizeGB, err := helpers.ParseSize(flag.GetString(ctx, "rootfs-size"), units.RAMInBytes, units.GiB)
+			if err != nil {
+				return machineConf, fmt.Errorf("invalid rootfs size: %w", err)
+			}
+			if sizeGB < 0 {
+				return machineConf, fmt.Errorf("--rootfs-size must not be negative")
+			}
+			machineConf.Rootfs.SizeGB = uint64(sizeGB)
+		}
+
+		if flag.IsSpecified(ctx, "rootfs-fs-size") {
+			sizeGB, err := helpers.ParseSize(flag.GetString(ctx, "rootfs-fs-size"), units.RAMInBytes, units.GiB)
+			if err != nil {
+				return machineConf, fmt.Errorf("invalid rootfs fs size: %w", err)
+			}
+			if sizeGB < 0 {
+				return machineConf, fmt.Errorf("--rootfs-fs-size must not be negative")
+			}
+			machineConf.Rootfs.FsSizeGB = uint64(sizeGB)
+		}
+
+		if machineConf.Rootfs.FsSizeGB > 0 {
+			if machineConf.Rootfs.SizeGB == 0 {
+				machineConf.Rootfs.SizeGB = machineConf.Rootfs.FsSizeGB
+			} else if machineConf.Rootfs.FsSizeGB > machineConf.Rootfs.SizeGB {
+				return machineConf, fmt.Errorf("--rootfs-fs-size must be smaller than or equal to --rootfs-size")
+			}
+		}
+	}
+
+	if flag.IsSpecified(ctx, "swap-size") {
+		sizeMB, err := helpers.ParseSize(flag.GetString(ctx, "swap-size"), units.RAMInBytes, units.MiB)
+		if err != nil {
+			return machineConf, fmt.Errorf("invalid swap size: %w", err)
+		}
+		if sizeMB <= 0 {
+			return machineConf, fmt.Errorf("--swap-size must be greater than zero")
+		}
+		machineConf.Init.SwapSizeMB = fly.Pointer(sizeMB)
 	}
 
 	parsedEnv, err := parseKVFlag(ctx, "env", machineConf.Env)
