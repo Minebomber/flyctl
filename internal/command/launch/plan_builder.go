@@ -41,6 +41,7 @@ func (e recoverableInUiError) String() string {
 			return fmt.Sprintf("%s\n%s\n", flyErr.Err, flyErr.Descript)
 		}
 	}
+
 	return e.base.Error()
 }
 
@@ -89,8 +90,10 @@ func (r *recoverableErrorBuilder) tryRecover(e error) error {
 	var asRecoverableErr recoverableInUiError
 	if errors.As(e, &asRecoverableErr) && r.canEnterUi {
 		r.errors = append(r.errors, asRecoverableErr)
+
 		return nil
 	}
+
 	return e
 }
 
@@ -99,11 +102,12 @@ func (r *recoverableErrorBuilder) build() string {
 		return ""
 	}
 
-	var allErrors string
+	var allErrors strings.Builder
 	for _, err := range r.errors {
-		allErrors += fmt.Sprintf(" * %s\n", strings.ReplaceAll(err.String(), "\n", "\n   "))
+		fmt.Fprintf(&allErrors, " * %s\n", strings.ReplaceAll(err.String(), "\n", "\n   "))
 	}
-	return allErrors
+
+	return allErrors.String()
 }
 
 func buildManifest(ctx context.Context, parentConfig *appconfig.Config, recoverableErrors *recoverableErrorBuilder) (*LaunchManifest, *planBuildCache, error) {
@@ -322,6 +326,7 @@ func nudgeTowardsDeploy(ctx context.Context, appName string) (bool, error) {
 	default:
 		return true, err
 	}
+
 	return true, nil
 }
 
@@ -420,6 +425,7 @@ func stateFromManifest(ctx context.Context, m LaunchManifest, optionalCache *pla
 		if m.Plan.ScannerFamily != scannerFamily {
 			got := familyToAppType(scannerFamily)
 			expected := familyToAppType(m.Plan.ScannerFamily)
+
 			return nil, fmt.Errorf("launch manifest was created for a %s, but this is a %s", expected, got)
 		}
 	}
@@ -438,7 +444,7 @@ func stateFromManifest(ctx context.Context, m LaunchManifest, optionalCache *pla
 			sourceInfo:   srcInfo,
 			warnedNoCcHa: warnedNoCcHa,
 		},
-		cache: map[string]interface{}{},
+		cache: map[string]any{},
 	}, nil
 }
 
@@ -459,9 +465,13 @@ func determineBaseAppConfig(ctx context.Context) (*appconfig.Config, bool, error
 
 		// if --attach is specified, we should return the config as the base config
 		attach := flag.GetBool(ctx, "attach")
-		copyConfig := flag.GetBool(ctx, "copy-config") || attach
+		// An explicit --config flag means the caller deliberately chose the file
+		// (e.g. the deployer passing --config fly.api-server.toml). Treat it as
+		// copy-config so we never prompt and never fall back to source scanning.
+		explicitConfig := flag.IsSpecified(ctx, "config")
+		copyConfig := flag.GetBool(ctx, "copy-config") || attach || explicitConfig
 
-		if !flag.IsSpecified(ctx, "copy-config") && !attach && !flag.GetYes(ctx) {
+		if !flag.IsSpecified(ctx, "copy-config") && !attach && !explicitConfig && !flag.GetYes(ctx) {
 			var err error
 			copyConfig, err = prompt.Confirm(ctx, colorize.Yellow("Would you like to use this fly.toml configuration for this app?"))
 			fmt.Fprintln(io.Out)
@@ -507,6 +517,7 @@ func sanitizeAppName(dirName string) string {
 			lastIsUnderscore = false
 		}
 	}
+
 	return strings.Trim(string(sanitized), "-")
 }
 
@@ -515,6 +526,7 @@ func validateAppName(appName string) error {
 	if failRegex.MatchString(appName) {
 		return errors.New("app name must consist of only lowercase letters, numbers, and dashes")
 	}
+
 	return nil
 }
 
@@ -535,6 +547,7 @@ func determineAppName(ctx context.Context, parentConfig *appconfig.Config, appCo
 				return outName, true
 			}
 		}
+
 		return "", false
 	}
 
@@ -560,6 +573,7 @@ func determineAppName(ctx context.Context, parentConfig *appconfig.Config, appCo
 				Suggest: "Specify the app name with the --name flag",
 			}
 		}
+
 		return appName, cause, nil
 	}
 
@@ -576,9 +590,10 @@ func determineAppName(ctx context.Context, parentConfig *appconfig.Config, appCo
 
 		if parentConfig != nil && parentConfig.AppName != "" {
 			appName = parentConfig.AppName + "-" + appName
-			if cause == "from your fly.toml" {
+			switch cause {
+			case "from your fly.toml":
 				cause = "from parent name and fly.toml"
-			} else if cause == "derived from your directory name" {
+			case "derived from your directory name":
 				if flag.GetString(ctx, "into") != "" {
 					cause = "from parent name and --into"
 				} else if flag.GetString(ctx, "from") != "" {
@@ -625,6 +640,7 @@ func determineAppName(ctx context.Context, parentConfig *appconfig.Config, appCo
 	if err := validateAppName(appName); err != nil {
 		return "", recoverableSpecifyInUi, recoverableInUiError{err}
 	}
+
 	return appName, cause, nil
 }
 
@@ -635,6 +651,7 @@ func appNameTaken(ctx context.Context, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
 	return !available, nil
 }
 
@@ -658,6 +675,10 @@ func determineOrg(ctx context.Context, config *appconfig.Config) (*fly.Organizat
 	for _, o := range orgs {
 		bySlug[o.Slug] = o
 	}
+	byRawSlug := make(map[string]fly.Organization, len(orgs))
+	for _, o := range orgs {
+		byRawSlug[o.RawSlug] = o
+	}
 	byName := make(map[string]fly.Organization, len(orgs))
 	for _, o := range orgs {
 		byName[o.Name] = o
@@ -672,6 +693,7 @@ func determineOrg(ctx context.Context, config *appconfig.Config) (*fly.Organizat
 				return nil, "", errors.New("no organizations found. Please create one from your fly dashboard first.")
 			} else {
 				o := orgs[0]
+
 				return &o, fmt.Sprintf("defaulting to '%s'", o.Slug), nil
 			}
 		}
@@ -682,6 +704,13 @@ func determineOrg(ctx context.Context, config *appconfig.Config) (*fly.Organizat
 	org, foundSlug := bySlug[orgRequested]
 	if !foundSlug {
 		if org, foundName := byName[orgRequested]; foundName {
+			return &org, "specified on the command line", nil
+		}
+
+		// The personal org's canonical Slug is always "personal", but callers
+		// (e.g. the deployer) may supply the real/raw slug (e.g. "lubien-339").
+		// Fall back to a RawSlug lookup before giving up.
+		if org, foundRawSlug := byRawSlug[orgRequested]; foundRawSlug {
 			return &org, "specified on the command line", nil
 		}
 
@@ -772,8 +801,10 @@ func determineRegion(ctx context.Context, config *appconfig.Config, paidPlan boo
 				return closestRegion, recoverableSpecifyInUi, recoverableInUiError{err}
 			}
 		}
+
 		return region, explanation, err
 	}
+
 	return closestRegion, "this is the fastest region for you", closestRegionErr
 }
 
@@ -796,6 +827,7 @@ func getRegionByCode(ctx context.Context, regionCode string) (*fly.Region, error
 			return &r, nil
 		}
 	}
+
 	return nil, fmt.Errorf("Unknown region '%s'. Run `fly platform regions` to see valid names", regionCode)
 }
 
@@ -811,6 +843,7 @@ func applyGuestToCompute(c *appconfig.Compute, g *fly.MachineGuest) {
 			c.MachineGuest = nil
 			c.Memory = ""
 			c.Size = k
+
 			return
 		}
 	}
@@ -831,15 +864,16 @@ func applyGuestToCompute(c *appconfig.Compute, g *fly.MachineGuest) {
 
 	// Restore original values for fields the Web UI does not return
 	if originalGuest != nil {
-		c.MachineGuest.KernelArgs = originalGuest.KernelArgs
-		c.MachineGuest.GPUs = originalGuest.GPUs
-		c.MachineGuest.HostDedicationID = originalGuest.HostDedicationID
+		c.KernelArgs = originalGuest.KernelArgs
+		c.GPUs = originalGuest.GPUs
+		c.HostDedicationID = originalGuest.HostDedicationID
 	}
 }
 
 func guestToCompute(g *fly.MachineGuest) *appconfig.Compute {
 	var c appconfig.Compute
 	applyGuestToCompute(&c, g)
+
 	return &c
 }
 
@@ -862,6 +896,7 @@ func determineCompute(ctx context.Context, config *appconfig.Config, srcInfo *sc
 	if def.CPUs != guest.CPUs || def.CPUKind != guest.CPUKind || def.MemoryMB != guest.MemoryMB {
 		reason = "specified on the command line"
 	}
+
 	return []*appconfig.Compute{guestToCompute(guest)}, reason, nil
 }
 
@@ -870,7 +905,9 @@ func planValidateHighAvailability(ctx context.Context, p *plan.LaunchPlan, billa
 		if print {
 			fmt.Fprintln(iostreams.FromContext(ctx).ErrOut, "Warning: This organization has no payment method, turning off high availability")
 		}
+
 		return false
 	}
+
 	return true
 }

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,6 +101,7 @@ func makeBuildContext(dockerfile string, opts ImageOptions, isRemote bool) (io.R
 	if err != nil {
 		return nil, errors.Wrap(err, "error archiving build context")
 	}
+
 	return r, nil
 }
 
@@ -114,6 +114,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 		// Where should debug messages be sent?
 		terminal.Debug("docker daemon not available, skipping")
 		build.BuildFinish()
+
 		return nil, "", nil
 	}
 
@@ -124,6 +125,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 			build.BuildFinish()
 			err := fmt.Errorf("dockerfile '%s' not found", opts.DockerfilePath)
 			tracing.RecordError(span, err, "failed to find dockerfile")
+
 			return nil, "", err
 		}
 		dockerfile = opts.DockerfilePath
@@ -135,6 +137,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 		span.AddEvent("dockerfile not found, skipping")
 		terminal.Debug("dockerfile not found, skipping")
 		build.BuildFinish()
+
 		return nil, "", nil
 	}
 
@@ -144,6 +147,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 		p, err := filepath.Rel(opts.WorkingDir, dockerfile)
 		if err != nil {
 			tracing.RecordError(span, err, "failed to get relative dockerfile path")
+
 			return nil, "", err
 		}
 		// On Windows, convert \ to a slash / as the docker build will
@@ -157,6 +161,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 	if err != nil {
 		build.BuildFinish()
 		build.BuilderInitFinish()
+
 		return nil, "", errors.Wrap(err, "error connecting to docker")
 	}
 	defer docker.Close() // skipcq: GO-S2307
@@ -167,6 +172,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 		build.BuildFinish()
 		build.BuilderInitFinish()
 		tracing.RecordError(span, err, "failed to check for buildkit support")
+
 		return nil, "", fmt.Errorf("error checking for buildkit support: %w", err)
 	}
 
@@ -194,6 +200,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 			build.BuildFinish()
 			build.ContextBuildFinish()
 			tracing.RecordError(span, err, "failed to make build context")
+
 			return nil, "", err
 		}
 
@@ -217,6 +224,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 	serverInfo, err := func() (system.Info, error) {
 		infoCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
+
 		return docker.Info(infoCtx)
 	}()
 	if err != nil {
@@ -226,6 +234,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 		build.ImageBuildFinish()
 		build.BuildFinish()
 		tracing.RecordError(span, err, "failed to fetch docker server info")
+
 		return nil, "", errors.Wrap(err, "error fetching docker server info")
 	}
 
@@ -238,6 +247,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 		build.ImageBuildFinish()
 		build.BuildFinish()
 		tracing.RecordError(span, err, "failed to parse build args")
+
 		return nil, "", fmt.Errorf("error parsing build args: %w", err)
 	}
 
@@ -251,6 +261,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 			build.ImageBuildFinish()
 			build.BuildFinish()
 			tracing.RecordError(span, err, "failed to build image")
+
 			return nil, "", errors.Wrap(err, "error building")
 		}
 	} else {
@@ -262,6 +273,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 			build.ImageBuildFinish()
 			build.BuildFinish()
 			tracing.RecordError(span, err, "failed to build image")
+
 			return nil, "", errors.Wrap(err, "error building")
 		}
 	}
@@ -275,6 +287,7 @@ func (*dockerfileBuilder) Run(ctx context.Context, dockerFactory *dockerClientFa
 		tb := render.NewTextBlock(ctx, "Pushing image to fly")
 		if err := pushToFly(ctx, docker, streams, opts.Tag); err != nil {
 			build.PushFinish()
+
 			return nil, "", err
 		}
 		build.PushFinish()
@@ -314,17 +327,10 @@ func buildOverlaybdImage(ctx context.Context, appName string, docker *dockerclie
 
 	terminal.Info("Building lazy-loading image, please wait...")
 
-	daemonHost := docker.DaemonHost()
-	parsed, err := url.Parse(daemonHost)
+	rchabUrl, err := builderAPIURL(docker.DaemonHost(), "/flyio/v1/buildOverlaybdImage")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse daemon host: %w", err)
 	}
-	hostPort := parsed.Host
-	host, _, _ := net.SplitHostPort(hostPort)
-	parsed.Host = host + ":8080"
-	parsed.Scheme = "http"
-	parsed.Path = "/flyio/v1/buildOverlaybdImage"
-	rchabUrl := parsed.String()
 
 	terminal.Debugf("rchab url: %s", rchabUrl)
 
@@ -523,6 +529,7 @@ func runBuildKitBuild(ctx context.Context, docker *dockerclient.Client, opts Ima
 		if err != nil {
 			return err
 		}
+
 		return nil
 	})
 	err = eg.Wait()
@@ -530,6 +537,7 @@ func runBuildKitBuild(ctx context.Context, docker *dockerclient.Client, opts Ima
 	if err != nil {
 		return "", err
 	}
+
 	return res.ExporterResponse[exptypes.ExporterImageDigestKey], nil
 }
 
@@ -566,6 +574,7 @@ func pushToFly(ctx context.Context, docker *dockerclient.Client, streams *iostre
 				return &RegistryUnauthorizedError{Tag: tag}
 			}
 		}
+
 		return errors.Wrap(err, "error rendering push status stream")
 	}
 

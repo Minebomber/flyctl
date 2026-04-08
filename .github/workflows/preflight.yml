@@ -44,7 +44,7 @@ jobs:
         run: |
           echo "FLY_PREFLIGHT_TEST_APP_PREFIX=gha-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       # If this workflow is triggered by code changes (eg PRs), download the binary to save time.
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         id: download-flyctl
         with:
           name: flyctl
@@ -71,7 +71,7 @@ jobs:
           ./scripts/preflight.sh -r "${{ github.ref }}" -g "${{ matrix.group }}" -o $GITHUB_OUTPUT
       - name: Post failure to slack
         if: ${{ github.ref == 'refs/heads/master' && failure() }}
-        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a
+        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95
         with:
           webhook: ${{ secrets.PREFLIGHT_SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook

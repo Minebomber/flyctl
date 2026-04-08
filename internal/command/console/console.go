@@ -194,6 +194,7 @@ func runConsole(ctx context.Context) error {
 
 	if err, extraInfo := appConfig.Validate(ctx); err != nil {
 		fmt.Fprintln(io.ErrOut, extraInfo)
+
 		return err
 	}
 
@@ -231,11 +232,7 @@ func runConsole(ctx context.Context) error {
 		consoleCommand = flag.GetString(ctx, "command")
 	}
 
-	// Allocate PTY only when no command is specified or when explicitly requested
-	// This matches the behavior of `fly ssh console`
-	allocPTY := consoleCommand == "" || flag.GetBool(ctx, "pty")
-
-	return ssh.Console(ctx, sshClient, consoleCommand, allocPTY, params.Container)
+	return ssh.Console(ctx, sshClient, consoleCommand, true, params.Container)
 }
 
 func selectMachine(ctx context.Context, app *fly.AppCompact, appConfig *appconfig.Config) (*fly.Machine, func(), error) {
@@ -248,6 +245,7 @@ func selectMachine(ctx context.Context, app *fly.AppCompact, appConfig *appconfi
 		if err != nil {
 			return nil, nil, err
 		}
+
 		return makeEphemeralConsoleMachine(ctx, app, appConfig, guest)
 	}
 }
@@ -403,6 +401,7 @@ func makeEphemeralConsoleMachine(ctx context.Context, app *fly.AppCompact, appCo
 		},
 		What: "to run the console",
 	}
+
 	return machine.LaunchEphemeral(ctx, app.Name, input)
 }
 

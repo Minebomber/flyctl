@@ -3,6 +3,7 @@ package machine
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -130,8 +131,8 @@ var sharedFlags = flag.Set{
 	},
 	flag.String{
 		Name: "restart",
-		Description: `Set the restart policy for a Machine. Options include 'no', 'always', and 'on-fail'.
-	Default is 'on-fail' for Machines created by 'fly deploy' and Machines with a schedule. Default is 'always' for Machines created by 'fly m run'.`,
+		Description: `Set the restart policy for a Machine. Options include 'no', 'always', and 'on-failure'.
+	Default is 'on-failure' for Machines created by 'fly deploy' and Machines with a schedule. Default is 'always' for Machines created by 'fly m run'.`,
 	},
 	flag.StringSlice{
 		Name:        "standby-for",
@@ -159,12 +160,12 @@ var sharedFlags = flag.Set{
 		Description: "Root filesystem size in GB. Accepts a plain number (in GB) or a human-readable size (e.g. 2gb, 5gb). Uses an overlayfs to allow the root filesystem to exceed its default size. Set to 0 to unset.",
 	},
 	flag.String{
-		Name:        "rootfs-fs-size",
-		Description: "Root filesystem size in GB. Accepts a plain number (in GB) or a human-readable size (e.g. 2gb, 5gb). Sets the size of the filesystem itself, independent of the rootfs volume size. Set to 0 to unset.",
-	},
-	flag.String{
 		Name:        "swap-size",
 		Description: "Swap size in MB. Accepts a plain number (in MB) or a human-readable size (e.g. 512mb, 1gb).",
+	},
+	flag.String{
+		Name:        "cachedrive-size",
+		Description: "Cache drive size in MB. Accepts a plain number (in MB) or a human-readable size (e.g. 512mb, 10gb). Set to 0 to disable.",
 	},
 }
 
@@ -204,7 +205,7 @@ var runOrCreateFlags = flag.Set{
 	},
 }
 
-func soManyErrors(args ...interface{}) error {
+func soManyErrors(args ...any) error {
 	sb := &strings.Builder{}
 	errs := 0
 
@@ -555,6 +556,7 @@ func getOrCreateEphemeralShellApp(ctx context.Context, client flyutil.Client) (*
 	for appi, appt := range apps {
 		if strings.HasPrefix(appt.Name, "flyctl-interactive-shells-") {
 			appc = &apps[appi]
+
 			break
 		}
 	}
@@ -646,6 +648,7 @@ func parseKVFlag(ctx context.Context, flagName string, initialMap map[string]str
 			return nil, fmt.Errorf("invalid key/value pairs specified for flag %s", flagName)
 		}
 	}
+
 	return parsed, nil
 }
 
@@ -692,6 +695,7 @@ func determineMachineConfig(
 		for _, c := range machineConf.Containers {
 			if c.Name == match {
 				container = c
+
 				break
 			}
 		}
@@ -716,7 +720,7 @@ func determineMachineConfig(
 	}
 
 	// Root filesystem persistence and size
-	if flag.IsSpecified(ctx, "rootfs-persist") || flag.IsSpecified(ctx, "rootfs-size") || flag.IsSpecified(ctx, "rootfs-fs-size") {
+	if flag.IsSpecified(ctx, "rootfs-persist") || flag.IsSpecified(ctx, "rootfs-size") {
 		if machineConf.Rootfs == nil {
 			machineConf.Rootfs = &fly.MachineRootfs{}
 		}
@@ -745,24 +749,6 @@ func determineMachineConfig(
 			machineConf.Rootfs.SizeGB = uint64(sizeGB)
 		}
 
-		if flag.IsSpecified(ctx, "rootfs-fs-size") {
-			sizeGB, err := helpers.ParseSize(flag.GetString(ctx, "rootfs-fs-size"), units.RAMInBytes, units.GiB)
-			if err != nil {
-				return machineConf, fmt.Errorf("invalid rootfs fs size: %w", err)
-			}
-			if sizeGB < 0 {
-				return machineConf, fmt.Errorf("--rootfs-fs-size must not be negative")
-			}
-			machineConf.Rootfs.FsSizeGB = uint64(sizeGB)
-		}
-
-		if machineConf.Rootfs.FsSizeGB > 0 {
-			if machineConf.Rootfs.SizeGB == 0 {
-				machineConf.Rootfs.SizeGB = machineConf.Rootfs.FsSizeGB
-			} else if machineConf.Rootfs.FsSizeGB > machineConf.Rootfs.SizeGB {
-				return machineConf, fmt.Errorf("--rootfs-fs-size must be smaller than or equal to --rootfs-size")
-			}
-		}
 	}
 
 	if flag.IsSpecified(ctx, "swap-size") {
@@ -773,7 +759,22 @@ func determineMachineConfig(
 		if sizeMB <= 0 {
 			return machineConf, fmt.Errorf("--swap-size must be greater than zero")
 		}
-		machineConf.Init.SwapSizeMB = fly.Pointer(sizeMB)
+		machineConf.Init.SwapSizeMB = new(sizeMB)
+	}
+
+	if flag.IsSpecified(ctx, "cachedrive-size") {
+		sizeMB, err := helpers.ParseSize(flag.GetString(ctx, "cachedrive-size"), units.RAMInBytes, units.MiB)
+		if err != nil {
+			return machineConf, fmt.Errorf("invalid cachedrive size: %w", err)
+		}
+		if sizeMB < 0 {
+			return machineConf, fmt.Errorf("--cachedrive-size must not be negative")
+		}
+		if sizeMB == 0 {
+			machineConf.CacheDrive = nil
+		} else {
+			machineConf.CacheDrive = &fly.MachineCacheDrive{SizeMB: uint64(sizeMB)}
+		}
 	}
 
 	parsedEnv, err := parseKVFlag(ctx, "env", machineConf.Env)
@@ -785,9 +786,7 @@ func determineMachineConfig(
 		machineConf.Env = make(map[string]string)
 	}
 
-	for k, v := range parsedEnv {
-		machineConf.Env[k] = v
-	}
+	maps.Copy(machineConf.Env, parsedEnv)
 
 	if flag.GetString(ctx, "schedule") != "" {
 		machineConf.Schedule = flag.GetString(ctx, "schedule")
@@ -836,9 +835,7 @@ func determineMachineConfig(
 		machineConf.Metadata = make(map[string]string)
 	}
 
-	for k, v := range parsedMetadata {
-		machineConf.Metadata[k] = v
-	}
+	maps.Copy(machineConf.Metadata, parsedMetadata)
 
 	services, err := command.DetermineServices(ctx, machineConf.Services)
 	if err != nil {
@@ -861,6 +858,12 @@ func determineMachineConfig(
 			Policy: fly.MachineRestartPolicyNo,
 		}
 	case "on-fail":
+		io := iostreams.FromContext(ctx)
+		fmt.Fprintln(io.ErrOut, io.ColorScheme().Yellow("The 'on-fail' restart policy is deprecated. Use 'on-failure' instead."))
+		machineConf.Restart = &fly.MachineRestart{
+			Policy: fly.MachineRestartPolicyOnFailure,
+		}
+	case "on-failure":
 		machineConf.Restart = &fly.MachineRestart{
 			Policy: fly.MachineRestartPolicyOnFailure,
 		}
@@ -910,7 +913,7 @@ func determineMachineConfig(
 		s := &machineConf.Services[idx]
 		// Use the chance to port the deprecated field
 		if machineConf.DisableMachineAutostart != nil {
-			s.Autostart = fly.Pointer(!(*machineConf.DisableMachineAutostart))
+			s.Autostart = new(!(*machineConf.DisableMachineAutostart))
 			machineConf.DisableMachineAutostart = nil
 		}
 
@@ -930,12 +933,12 @@ func determineMachineConfig(
 				if err := value.UnmarshalText([]byte(asString)); err != nil {
 					return nil, err
 				}
-				s.Autostop = fly.Pointer(value)
+				s.Autostop = new(value)
 			}
 		}
 
 		if flag.IsSpecified(ctx, "autostart") {
-			s.Autostart = fly.Pointer(flag.GetBool(ctx, "autostart"))
+			s.Autostart = new(flag.GetBool(ctx, "autostart"))
 		}
 	}
 

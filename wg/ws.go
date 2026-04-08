@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -92,6 +93,7 @@ func (wswg *WsWgProxy) lastIo() time.Duration {
 	wswg.lock.RLock()
 	s := time.Since(wswg.atime)
 	wswg.lock.RUnlock()
+
 	return s
 }
 
@@ -123,11 +125,15 @@ func (wswg *WsWgProxy) Port() (int, error) {
 }
 
 func (wswg *WsWgProxy) Connect(ctx context.Context, endpoint string) error {
-	rurl := fmt.Sprintf("wss://%s:443/", endpoint)
+	rurl := (&url.URL{
+		Scheme: "wss",
+		Host:   net.JoinHostPort(endpoint, "443"),
+		Path:   "/",
+	}).String()
 
 	log.Printf("(re-)connecting to %s", rurl)
 
-	ws, _, err := websocket.Dial(ctx, rurl, &websocket.DialOptions{
+	ws, _, err := websocket.Dial(ctx, rurl, &websocket.DialOptions{ // nolint: bodyclose
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
 				Proxy: http.ProxyFromEnvironment,
@@ -175,6 +181,7 @@ func (wswg *WsWgProxy) wsWrite(c net.Conn, b []byte) error {
 	defer wswg.wrlock.Unlock()
 
 	_, err := c.Write(b)
+
 	return err
 }
 

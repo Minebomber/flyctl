@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -50,7 +48,7 @@ type ImageOptions struct {
 	Target               string
 	NoCache              bool
 	BuiltIn              string
-	BuiltInSettings      map[string]interface{}
+	BuiltInSettings      map[string]any
 	Builder              string
 	Buildpacks           []string
 	Label                map[string]string
@@ -136,6 +134,7 @@ func (di *DeploymentImage) String() string {
 	if di.Digest == "" {
 		return di.Tag
 	}
+
 	return fmt.Sprintf("%s@%s", di.Tag, di.Digest)
 }
 
@@ -202,6 +201,7 @@ func (r *Resolver) ResolveReference(ctx context.Context, streams *iostreams.IOSt
 			bld.BuildAndPushFinish()
 			bld.FinishImageStrategy(s, true /* failed */, err, note)
 			r.finishBuild(ctx, bld, true /* failed */, err.Error(), nil)
+
 			return nil, err
 		}
 		if img != nil {
@@ -224,6 +224,7 @@ func (r *Resolver) ResolveReference(ctx context.Context, streams *iostreams.IOSt
 	r.finishBuild(ctx, bld, true /* failed */, "no strategies resulted in an image", nil)
 	err = fmt.Errorf("could not find image %q", opts.ImageRef)
 	tracing.RecordError(span, err, "failed to resolve image")
+
 	return nil, err
 }
 
@@ -235,6 +236,7 @@ func (r *Resolver) BuildImage(ctx context.Context, streams *iostreams.IOStreams,
 	if !r.dockerFactory.mode.IsAvailable() {
 		err := errors.New("docker is unavailable to build the deployment image")
 		tracing.RecordError(span, err, "docker is unavailable to build the deployment image")
+
 		return nil, err
 	}
 
@@ -304,6 +306,7 @@ func (r *Resolver) BuildImage(ctx context.Context, streams *iostreams.IOStreams,
 			bld.BuildAndPushFinish()
 			bld.FinishStrategy(s, true /* failed */, err, note)
 			r.finishBuild(ctx, bld, true /* failed */, err.Error(), nil)
+
 			return nil, err
 		}
 		if img != nil {
@@ -323,6 +326,7 @@ func (r *Resolver) BuildImage(ctx context.Context, streams *iostreams.IOStreams,
 	}
 
 	r.finishBuild(ctx, bld, true /* failed */, "no strategies resulted in an image", nil)
+
 	return nil, errors.New("app does not have a Dockerfile or buildpacks configured. See https://fly.io/docs/reference/configuration/#the-build-section")
 }
 
@@ -337,6 +341,7 @@ func (r *Resolver) createImageBuild(ctx context.Context, strategies []imageResol
 		Publish:    opts.Publish,
 		Tag:        opts.Tag,
 	}
+
 	return r.createBuildGql(ctx, strategiesAvailable, imageOps)
 }
 
@@ -360,6 +365,7 @@ func (r *Resolver) createBuild(ctx context.Context, strategies []imageBuilder, o
 		Tag:             opts.Tag,
 		Target:          opts.Target,
 	}
+
 	return r.createBuildGql(ctx, strategiesAvailable, imageOpts)
 }
 
@@ -394,10 +400,10 @@ func (r *Resolver) createBuildGql(ctx context.Context, strategiesAvailable []str
 				sentry.WithTraceID(ctx),
 				sentry.WithTag("feature", "build-api-create-build"),
 				sentry.WithContexts(map[string]sentry.Context{
-					"app": map[string]interface{}{
+					"app": map[string]any{
 						"name": input.AppName,
 					},
-					"builder": map[string]interface{}{
+					"builder": map[string]any{
 						"type": input.BuilderType,
 					},
 				}),
@@ -405,6 +411,7 @@ func (r *Resolver) createBuildGql(ctx context.Context, strategiesAvailable []str
 		}
 		span.SetAttributes(attribute.Bool("is_app_not_found_error", isAppNotFoundErr))
 		tracing.RecordError(span, err, "failed to create build")
+
 		return newFailedBuild(), err
 	}
 
@@ -417,6 +424,7 @@ func limitLogs(log string) string {
 	if len(log) > logLimit {
 		return log[len(log)-logLimit:]
 	}
+
 	return log
 }
 
@@ -571,6 +579,7 @@ type buildResult struct {
 func (r *Resolver) finishBuild(ctx context.Context, build *build, failed bool, logs string, img *DeploymentImage) (*buildResult, error) {
 	if build.CreateApiFailed {
 		terminal.Debug("Skipping FinishBuild() gql call, because CreateBuild() failed.\n")
+
 		return nil, nil
 	}
 	uiexClient := uiexutil.ClientFromContext(ctx)
@@ -603,13 +612,13 @@ func (r *Resolver) finishBuild(ctx context.Context, build *build, failed bool, l
 			sentry.WithTraceID(ctx),
 			sentry.WithTag("feature", "build-api-finish-build"),
 			sentry.WithContexts(map[string]sentry.Context{
-				"app": map[string]interface{}{
+				"app": map[string]any{
 					"name": r.dockerFactory.appName,
 				},
-				"sourceBuild": map[string]interface{}{
+				"sourceBuild": map[string]any{
 					"id": build.BuildId,
 				},
-				"builder": map[string]interface{}{
+				"builder": map[string]any{
 					"type":            build.BuilderMeta.BuilderType,
 					"appName":         build.BuilderMeta.RemoteAppName,
 					"machineId":       build.BuilderMeta.RemoteMachineId,
@@ -618,8 +627,10 @@ func (r *Resolver) finishBuild(ctx context.Context, build *build, failed bool, l
 				},
 			}),
 		)
+
 		return nil, err
 	}
+
 	return &buildResult{
 		BuildId:         resp.Id,
 		Status:          resp.Status,
@@ -646,6 +657,7 @@ func heartbeat(ctx context.Context, client *dockerclient.Client, req *http.Reque
 	resp, err := client.HTTPClient().Do(req.Clone(ctx))
 	if err != nil {
 		tracing.RecordError(span, err, "failed to check heartbeat")
+
 		return err
 	}
 	defer resp.Body.Close() // skipcq: GO-S2307
@@ -662,6 +674,7 @@ func heartbeat(ctx context.Context, client *dockerclient.Client, req *http.Reque
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		tracing.RecordError(span, err, "failed to read response body")
+
 		return &httpError{StatusCode: resp.StatusCode, Body: err.Error()}
 	}
 
@@ -676,6 +689,7 @@ func (r *Resolver) StartHeartbeat(ctx context.Context) (*StopSignal, error) {
 
 	if !r.dockerFactory.remote || r.dockerFactory.mode.UseDepot() || r.provisioner.UseBuildkit() {
 		span.AddEvent("won't check heartbeat of non-remote build")
+
 		return nil, nil
 	}
 
@@ -685,12 +699,14 @@ func (r *Resolver) StartHeartbeat(ctx context.Context) (*StopSignal, error) {
 	dockerClient, err := r.dockerFactory.buildFn(ctx, nil)
 	if err != nil {
 		terminal.Warnf(errMsg, err)
+
 		return nil, err
 	}
 	heartbeatUrl, err := getHeartbeatUrl(dockerClient)
 	if err != nil {
 		terminal.Warnf(errMsg, err)
 		tracing.RecordError(span, err, "failed to get heartbeaturl")
+
 		return nil, err
 	}
 
@@ -699,6 +715,7 @@ func (r *Resolver) StartHeartbeat(ctx context.Context) (*StopSignal, error) {
 	if err != nil {
 		terminal.Warnf(errMsg, err)
 		tracing.RecordError(span, err, "failed to get http request")
+
 		return nil, err
 	}
 	heartbeatReq.SetBasicAuth(r.dockerFactory.appName, config.Tokens(ctx).Docker())
@@ -715,12 +732,14 @@ func (r *Resolver) StartHeartbeat(ctx context.Context) (*StopSignal, error) {
 		if errors.As(err, &h) {
 			if h.StatusCode == http.StatusNotFound {
 				terminal.Debugf("This builder doesn't have the heartbeat endpoint %s\n", heartbeatUrl)
+
 				return nil, nil
 			}
 		} else {
 			terminal.Debugf("Remote builder heartbeat pulse failed, not going to run heartbeat: %v\n", err)
 		}
 		tracing.RecordError(span, err, "Remote builder heartbeat pulse failed, not going to run heartbeat")
+
 		return nil, fmt.Errorf("failed to send first heartbeat: %w", err)
 	}
 
@@ -765,21 +784,12 @@ func (r *Resolver) StartHeartbeat(ctx context.Context) (*StopSignal, error) {
 			}
 		}
 	}()
+
 	return &done, nil
 }
 
 func getHeartbeatUrl(dockerClient *dockerclient.Client) (string, error) {
-	daemonHost := dockerClient.DaemonHost()
-	parsed, err := url.Parse(daemonHost)
-	if err != nil {
-		return "", err
-	}
-	hostPort := parsed.Host
-	host, _, _ := net.SplitHostPort(hostPort)
-	parsed.Host = host + ":8080"
-	parsed.Scheme = "http"
-	parsed.Path = "/flyio/v1/extendDeadline"
-	return parsed.String(), nil
+	return builderAPIURL(dockerClient.DaemonHost(), "/flyio/v1/extendDeadline")
 }
 
 func (s *StopSignal) Stop() {
@@ -814,6 +824,7 @@ func NewResolver(
 	}
 
 	resolver.dockerFactory = newDockerClientFactory(daemonType, apiClient, appName, iostreams, connectOverWireguard, recreateBuilder)
+
 	return resolver
 }
 
