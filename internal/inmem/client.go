@@ -316,6 +316,10 @@ func (m *Client) GetOrganizationBySlug(ctx context.Context, slug string) (*fly.O
 	panic("TODO")
 }
 
+func (m *Client) GetOrgLimitedAccessTokens(ctx context.Context, orgSlug string) ([]fly.LimitedAccessToken, error) {
+	panic("TODO")
+}
+
 func (m *Client) GetOrganizationRemoteBuilderBySlug(ctx context.Context, slug string) (*fly.Organization, error) {
 	panic("TODO")
 }
@@ -333,6 +337,14 @@ func (m *Client) AddAllowedReplaySourceOrgs(ctx context.Context, orgSlug string,
 }
 
 func (m *Client) RemoveAllowedReplaySourceOrgs(ctx context.Context, orgSlug string, orgSlugsToRemove []string) (*fly.Organization, error) {
+	panic("TODO")
+}
+
+func (m *Client) GetAllowAllCrossNetworkReplays(ctx context.Context, slug string) (bool, error) {
+	panic("TODO")
+}
+
+func (m *Client) SetAllowAllCrossNetworkReplays(ctx context.Context, orgSlug string, allow bool) (*fly.Organization, error) {
 	panic("TODO")
 }
 

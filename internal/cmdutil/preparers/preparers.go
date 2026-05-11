@@ -19,6 +19,8 @@ import (
 	"github.com/superfly/flyctl/internal/logger"
 	"github.com/superfly/flyctl/internal/state"
 	"github.com/superfly/flyctl/internal/uiex"
+	mpgv1 "github.com/superfly/flyctl/internal/uiex/mpg/v1"
+	mpgv2 "github.com/superfly/flyctl/internal/uiex/mpg/v2"
 	"github.com/superfly/flyctl/internal/uiexutil"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -69,6 +71,27 @@ func InitClient(ctx context.Context) (context.Context, error) {
 			return nil, err
 		}
 		ctx = uiexutil.NewContextWithClient(ctx, client)
+	}
+
+	if mpgv1.ClientFromContext(ctx) == nil {
+		mpgClient, err := mpgv1.NewClientWithOptions(ctx, uiex.NewClientOpts{
+			Logger: logger,
+			Tokens: cfg.Tokens,
+		})
+		if err != nil {
+			return nil, err
+		}
+		ctx = mpgv1.NewContextWithClient(ctx, mpgClient)
+	}
+	if mpgv2.ClientFromContext(ctx) == nil {
+		mpgClient, err := mpgv2.NewClientWithOptions(ctx, uiex.NewClientOpts{
+			Logger: logger,
+			Tokens: cfg.Tokens,
+		})
+		if err != nil {
+			return nil, err
+		}
+		ctx = mpgv2.NewContextWithClient(ctx, mpgClient)
 	}
 
 	if flapsutil.ClientFromContext(ctx) == nil {
