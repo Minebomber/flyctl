@@ -93,6 +93,7 @@ var sharedFlags = flag.Set{
 		Description: "Set the target build stage to build if the Dockerfile has more than one stage",
 		Hidden:      true,
 	},
+	flag.BuildContextWarnSize(),
 	flag.Bool{
 		Name:        "no-build-cache",
 		Description: "Do not use the cache when building the image",
@@ -268,7 +269,7 @@ func newRun() *cobra.Command {
 		},
 		flag.Bool{
 			Name:        "shell",
-			Description: "Open a shell on the Machine once created (implies --it --rm). If no app is specified, a temporary app is created just for this Machine and destroyed when the Machine is destroyed. See also --command and --user.",
+			Description: "Open a shell on the Machine once created (implies --it --rm). If no app is specified, an app for interactive shells is created or reused. The Machine is destroyed when the shell exits; the app is retained for future shells. See also --command and --user.",
 			Hidden:      false,
 		},
 		flag.String{
@@ -501,7 +502,7 @@ func runMachineRun(ctx context.Context) error {
 			return err
 		}
 
-		err = ssh.Console(ctx, sshClient, flag.GetString(ctx, "command"), true, "")
+		err = ssh.Console(ctx, sshClient, flag.GetString(ctx, "command"), true, ssh.SessionTarget{})
 		if destroy {
 			err = soManyErrors("console", err, "destroy machine", Destroy(ctx, app.Name, machine, true))
 		}

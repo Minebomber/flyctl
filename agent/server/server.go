@@ -19,6 +19,7 @@ import (
 	"github.com/superfly/flyctl/internal/config"
 	"github.com/superfly/flyctl/internal/env"
 	"github.com/superfly/flyctl/internal/flyutil"
+	"github.com/superfly/flyctl/internal/metrics"
 	"github.com/superfly/flyctl/internal/metrics/synthetics"
 	"github.com/superfly/flyctl/internal/sentry"
 	"github.com/superfly/flyctl/internal/wireguard"
@@ -245,15 +246,22 @@ func (s *server) buildTunnel(ctx context.Context, org *fly.Organization, reestab
 	}
 
 	// WIP: can't stay this way, need something more clever than this
+	transport := "udp"
 	if env.IsCI() || os.Getenv("WSWG") != "" || s.ConfigWebsockets {
-		if tunnel, err = wg.ConnectWS(context.Background(), state); err != nil {
+		transport = "websocket"
+
+		if tunnel, err = wg.ConnectWS(ctx, state); err != nil {
 			return
 		}
 	} else {
-		if tunnel, err = wg.Connect(context.Background(), state); err != nil {
+		if tunnel, err = wg.Connect(ctx, state); err != nil {
 			return
 		}
 	}
+
+	// use the agent's run context: the session context may be gone before the
+	// send completes
+	metrics.AgentWireGuardTransport(s.runCtx, transport)
 
 	s.tunnels[tk] = tunnel
 

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/superfly/client-signals/go"
 	"github.com/superfly/flyctl/terminal"
 )
 
@@ -80,6 +81,8 @@ type LaunchStatusPayload struct {
 
 	ScannerFamily string `json:"scanner_family"`
 	FlyctlVersion string `json:"flyctlVersion"`
+	Operator      string `json:"operator,omitempty"`
+	AgentName     string `json:"agentName,omitempty"`
 }
 
 func LaunchStatus(ctx context.Context, payload LaunchStatusPayload) {
@@ -113,6 +116,8 @@ type DeployStatusPayload struct {
 	Strategy      string `json:"strategy"`
 
 	FlyctlVersion string `json:"flyctlVersion"`
+	Operator      string `json:"operator,omitempty"`
+	AgentName     string `json:"agentName,omitempty"`
 }
 
 func DeployStatus(ctx context.Context, payload DeployStatusPayload) {
@@ -133,6 +138,13 @@ func DeployStatus(ctx context.Context, payload DeployStatusPayload) {
 	}
 
 	Send(ctx, "deploy/status", payload)
+}
+
+// AgentWireGuardTransport reports which transport the agent used to establish
+// a WireGuard tunnel: "udp" or "websocket". It sends immediately because the
+// agent daemon never reaches the end-of-command metrics flush.
+func AgentWireGuardTransport(ctx context.Context, transport string) {
+	SendImmediate(ctx, "agent_wireguard/transport", map[string]string{"transport": transport})
 }
 
 func Send[T any](ctx context.Context, metricSlug string, value T) {
@@ -157,6 +169,13 @@ func StartTiming(ctx context.Context, metricSlug string) func() {
 	return func() {
 		Send(ctx, metricSlug, map[string]float64{"duration_seconds": time.Since(start).Seconds()})
 	}
+}
+
+// OperatorFromSignals returns an operator classification and, when the
+// operator is "agent", the agent name. Precedence is defined by
+// clientsignals.Signals.Operator(): ci > agent > interactive > unknown.
+func OperatorFromSignals(s clientsignals.Signals) (operator, agentName string) {
+	return s.Operator(), s.Agent
 }
 
 type disableFlushMetricsKey struct{}

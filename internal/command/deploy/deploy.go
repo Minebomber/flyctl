@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/logrusorgru/aurora"
 	"github.com/spf13/cobra"
+	"github.com/superfly/client-signals/go"
 	"github.com/superfly/fly-go/flaps"
 	"github.com/superfly/flyctl/internal/appconfig"
 	"github.com/superfly/flyctl/internal/build/imgsrc"
@@ -50,6 +52,7 @@ var CommonFlags = flag.Set{
 	flag.BuildArg(),
 	flag.BuildSecret(),
 	flag.BuildTarget(),
+	flag.BuildContextWarnSize(),
 	flag.NoCache(),
 	flag.Depot(),
 	flag.DepotScope(),
@@ -363,15 +366,19 @@ func DeployWithConfig(ctx context.Context, appConfig *appconfig.Config, userID i
 	recreateBuilder := flag.GetRecreateBuilder(ctx)
 
 	// Fetch an image ref or build from source to get the final image reference to deploy
-	img, err := determineImage(ctx, app, appConfig, usingWireguard, recreateBuilder)
+	dockerfileMaterializer := imgsrc.NewDockerfileMaterializer()
+	img, err := determineImage(ctx, app, appConfig, usingWireguard, recreateBuilder, dockerfileMaterializer)
 	if err != nil {
 		noBuilder := strings.Contains(err.Error(), "Could not find App")
 		recreateBuilder = recreateBuilder || noBuilder
 		if noBuilder || (usingWireguard && httpFailover) {
 			span.SetAttributes(attribute.String("builder.failover_error", err.Error()))
 			span.AddEvent("using http failover")
-			img, err = determineImage(ctx, app, appConfig, false, recreateBuilder)
+			img, err = determineImage(ctx, app, appConfig, false, recreateBuilder, dockerfileMaterializer)
 		}
+	}
+	if cleanupErr := dockerfileMaterializer.Close(); cleanupErr != nil {
+		err = errors.Join(err, cleanupErr)
 	}
 
 	if err != nil {
@@ -516,6 +523,7 @@ func deployToMachines(
 
 	startTime := time.Now()
 	var status metrics.DeployStatusPayload
+	status.Operator, status.AgentName = metrics.OperatorFromSignals(clientsignals.DetectOnce())
 
 	metrics.Started(ctx, "deploy")
 	// TODO: remove this once there is nothing upstream using it

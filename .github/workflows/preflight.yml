@@ -21,6 +21,8 @@ jobs:
         group:
           - apps
           - deploy
+          - deploy-fixtures
+          - bluegreen
           - launch
           - scale
           - volume
@@ -28,12 +30,13 @@ jobs:
           - logs
           - machine
           - postgres
+          - postgres-flex-failover
           - tokens
           - wireguard
           - misc
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
           check-latest: true
@@ -71,7 +74,7 @@ jobs:
           ./scripts/preflight.sh -r "${{ github.ref }}" -g "${{ matrix.group }}" -o $GITHUB_OUTPUT
       - name: Post failure to slack
         if: ${{ github.ref == 'refs/heads/master' && failure() }}
-        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d
         with:
           webhook: ${{ secrets.PREFLIGHT_SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook

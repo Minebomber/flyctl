@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/pflag"
+	"github.com/superfly/client-signals/go"
 	fly "github.com/superfly/fly-go"
 	"github.com/superfly/fly-go/flaps"
 	"github.com/superfly/flyctl/helpers"
@@ -56,16 +57,23 @@ func InitClient(ctx context.Context) (context.Context, error) {
 	fly.SetInstrumenter(instrument.ApiAdapter)
 	fly.SetTransport(otelhttp.NewTransport(http.DefaultTransport))
 
+	s := clientsignals.DetectOnce()
+	signals := &s
+
 	if flyutil.ClientFromContext(ctx) == nil {
-		client := flyutil.NewClientFromOptions(ctx, fly.ClientOptions{Tokens: cfg.Tokens})
+		client := flyutil.NewClientFromOptions(ctx, fly.ClientOptions{
+			Tokens:        cfg.Tokens,
+			ClientSignals: signals,
+		})
 		logger.Debug("client initialized.")
 		ctx = flyutil.NewContextWithClient(ctx, client)
 	}
 
 	if uiexutil.ClientFromContext(ctx) == nil {
 		client, err := uiexutil.NewClientWithOptions(ctx, uiex.NewClientOpts{
-			Logger: logger,
-			Tokens: cfg.Tokens,
+			Logger:        logger,
+			Tokens:        cfg.Tokens,
+			ClientSignals: signals,
 		})
 		if err != nil {
 			return nil, err
@@ -75,8 +83,9 @@ func InitClient(ctx context.Context) (context.Context, error) {
 
 	if mpgv1.ClientFromContext(ctx) == nil {
 		mpgClient, err := mpgv1.NewClientWithOptions(ctx, uiex.NewClientOpts{
-			Logger: logger,
-			Tokens: cfg.Tokens,
+			Logger:        logger,
+			Tokens:        cfg.Tokens,
+			ClientSignals: signals,
 		})
 		if err != nil {
 			return nil, err
@@ -85,8 +94,9 @@ func InitClient(ctx context.Context) (context.Context, error) {
 	}
 	if mpgv2.ClientFromContext(ctx) == nil {
 		mpgClient, err := mpgv2.NewClientWithOptions(ctx, uiex.NewClientOpts{
-			Logger: logger,
-			Tokens: cfg.Tokens,
+			Logger:        logger,
+			Tokens:        cfg.Tokens,
+			ClientSignals: signals,
 		})
 		if err != nil {
 			return nil, err
@@ -95,7 +105,9 @@ func InitClient(ctx context.Context) (context.Context, error) {
 	}
 
 	if flapsutil.ClientFromContext(ctx) == nil {
-		flapsClient, err := flapsutil.NewClientWithOptions(ctx, flaps.NewClientOpts{})
+		flapsClient, err := flapsutil.NewClientWithOptions(ctx, flaps.NewClientOpts{
+			ClientSignals: signals,
+		})
 		if err != nil {
 			return nil, err
 		}

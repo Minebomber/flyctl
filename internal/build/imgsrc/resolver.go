@@ -3,6 +3,7 @@ package imgsrc
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/superfly/flyctl/agent"
 	"github.com/superfly/flyctl/internal/buildinfo"
 	"github.com/superfly/flyctl/internal/config"
+	"github.com/superfly/flyctl/internal/dockerfileurl"
 	"github.com/superfly/flyctl/internal/flag"
 	"github.com/superfly/flyctl/internal/flapsutil"
 	"github.com/superfly/flyctl/internal/flyutil"
@@ -62,7 +64,7 @@ func (io ImageOptions) ToSpanAttributes() []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		attribute.String("imageoptions.app_name", io.AppName),
 		attribute.String("imageoptions.work_dir", io.WorkingDir),
-		attribute.String("imageoptions.dockerfile_path", io.DockerfilePath),
+		attribute.String("imageoptions.dockerfile_path", dockerfileurl.ForDisplay(io.DockerfilePath)),
 		attribute.String("imageoptions.ignorefile_path", io.IgnorefilePath),
 		attribute.String("imageoptions.image.ref", io.ImageRef),
 		attribute.String("imageoptions.image.label", io.ImageLabel),
@@ -130,6 +132,10 @@ type DeploymentImage struct {
 }
 
 func (di *DeploymentImage) String() string {
+	if di == nil {
+		return "<nil>"
+	}
+
 	if di.Digest == "" {
 		return di.Tag
 	}
@@ -163,6 +169,9 @@ type Resolver struct {
 	// dockerFactory is a factory for creating docker clients.
 	// Some strategies don't need it, but it won't be nil.
 	dockerFactory *dockerClientFactory
+	// dockerfileMaterializer is shared by deploy retries so a remote Dockerfile
+	// is fetched once and reused across builder connection failover.
+	dockerfileMaterializer *DockerfileMaterializer
 }
 
 type StopSignal struct {
@@ -232,6 +241,17 @@ func (r *Resolver) BuildImage(ctx context.Context, streams *iostreams.IOStreams,
 	ctx, span := tracing.GetTracer().Start(ctx, "build_image", trace.WithAttributes(opts.ToSpanAttributes()...))
 	defer span.End()
 
+	materializer := r.dockerfileMaterializer
+	if materializer == nil {
+		materializer = NewDockerfileMaterializer()
+		defer func() {
+			if cleanupErr := materializer.Close(); cleanupErr != nil {
+				img = nil
+				err = stderrors.Join(err, cleanupErr)
+			}
+		}()
+	}
+
 	if !r.dockerFactory.mode.IsAvailable() {
 		err := errors.New("docker is unavailable to build the deployment image")
 		tracing.RecordError(span, err, "docker is unavailable to build the deployment image")
@@ -244,6 +264,11 @@ func (r *Resolver) BuildImage(ctx context.Context, streams *iostreams.IOStreams,
 	}
 
 	span.SetAttributes(attribute.String("tag", opts.Tag))
+
+	// Warn early if the build context we're about to upload looks unexpectedly
+	// large, so users can spot a missing .dockerignore entry before the slow
+	// transfer happens. Best-effort: never blocks the build.
+	warnOnLargeBuildContext(streams, opts, flag.GetString(ctx, flag.BuildContextWarnSizeName))
 
 	strategies := []imageBuilder{}
 
@@ -299,7 +324,7 @@ func (r *Resolver) BuildImage(ctx context.Context, streams *iostreams.IOStreams,
 		bld.ResetTimings()
 		bld.BuildAndPushStart()
 		var note string
-		img, note, err = s.Run(ctx, r.dockerFactory, streams, opts, bld)
+		img, note, err = runImageBuilder(ctx, s, r.dockerFactory, streams, opts, bld, materializer)
 		terminal.Debugf("result image:%+v error:%v\n", img, err)
 		if err != nil {
 			bld.BuildAndPushFinish()
@@ -355,7 +380,7 @@ func (r *Resolver) createBuild(ctx context.Context, strategies []imageBuilder, o
 		Builder:         opts.Builder,
 		BuiltIn:         opts.BuiltIn,
 		BuiltInSettings: opts.BuiltInSettings,
-		DockerfilePath:  opts.DockerfilePath,
+		DockerfilePath:  dockerfileurl.ForDisplay(opts.DockerfilePath),
 		ExtraBuildArgs:  opts.ExtraBuildArgs,
 		ImageLabel:      opts.ImageLabel,
 		ImageRef:        opts.ImageRef,
@@ -806,6 +831,13 @@ func WithProvisioner(provisioner *Provisioner) func(resolver *Resolver) {
 	}
 }
 
+// WithDockerfileMaterializer shares one lazy remote Dockerfile snapshot across resolvers.
+func WithDockerfileMaterializer(materializer *DockerfileMaterializer) func(resolver *Resolver) {
+	return func(resolver *Resolver) {
+		resolver.dockerfileMaterializer = materializer
+	}
+}
+
 func NewResolver(
 	daemonType DockerDaemonType, apiClient flyutil.Client, appName string, iostreams *iostreams.IOStreams,
 	connectOverWireguard, recreateBuilder bool,
@@ -830,6 +862,23 @@ func NewResolver(
 type imageBuilder interface {
 	Name() string
 	Run(ctx context.Context, dockerFactory *dockerClientFactory, streams *iostreams.IOStreams, opts ImageOptions, build *build) (*DeploymentImage, string, error)
+}
+
+type dockerfileConsumer interface {
+	usesDockerfile()
+}
+
+func runImageBuilder(ctx context.Context, strategy imageBuilder, dockerFactory *dockerClientFactory, streams *iostreams.IOStreams, opts ImageOptions, build *build, materializer *DockerfileMaterializer) (*DeploymentImage, string, error) {
+	if _, ok := strategy.(dockerfileConsumer); ok {
+		path, err := materializer.materialize(ctx, opts.DockerfilePath)
+		if err != nil {
+			return nil, "", err
+		}
+
+		opts.DockerfilePath = path
+	}
+
+	return strategy.Run(ctx, dockerFactory, streams, opts, build)
 }
 
 type imageResolver interface {

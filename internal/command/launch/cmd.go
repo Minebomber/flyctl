@@ -15,6 +15,7 @@ import (
 	"github.com/logrusorgru/aurora"
 	"github.com/samber/lo"
 	"github.com/spf13/cobra"
+	"github.com/superfly/client-signals/go"
 	"github.com/superfly/flyctl/gql"
 	"github.com/superfly/flyctl/internal/appconfig"
 	"github.com/superfly/flyctl/internal/appsecrets"
@@ -166,7 +167,7 @@ func New() (cmd *cobra.Command) {
 		},
 		flag.String{
 			Name:        "command",
-			Description: "The command to override the Docker CND.",
+			Description: "The command to override the Docker CMD.",
 		},
 		flag.StringSlice{
 			Name:        "volume",
@@ -303,6 +304,7 @@ func run(ctx context.Context) (err error) {
 
 	startTime := time.Now()
 	var status metrics.LaunchStatusPayload
+	status.Operator, status.AgentName = metrics.OperatorFromSignals(clientsignals.DetectOnce())
 	metrics.Started(ctx, "launch")
 
 	var state *launchState = nil
@@ -408,6 +410,16 @@ func run(ctx context.Context) (err error) {
 		if err != nil {
 			var recoverableErr recoverableInUiError
 			if !errors.As(err, &recoverableErr) || !canEnterUi {
+				// Populate status from partial manifest so metrics
+				// events carry org/app context even on early failures.
+				if launchManifest != nil && launchManifest.Plan != nil {
+					status.AppName = launchManifest.Plan.AppName
+					status.OrgSlug = launchManifest.Plan.OrgSlug
+					status.Region = launchManifest.Plan.RegionCode
+					status.FlyctlVersion = launchManifest.Plan.FlyctlVersion.String()
+					status.ScannerFamily = launchManifest.Plan.ScannerFamily
+				}
+
 				return err
 			}
 		}
@@ -454,7 +466,7 @@ func run(ctx context.Context) (err error) {
 		status.VM.ProcessN = len(vm.Processes)
 	}
 
-	status.HasPostgres = launchManifest.Plan.Postgres.FlyPostgres != nil || launchManifest.Plan.Postgres.SupabasePostgres != nil || launchManifest.Plan.Postgres.ManagedPostgres != nil
+	status.HasPostgres = launchManifest.Plan.Postgres.FlyPostgres != nil || launchManifest.Plan.Postgres.ManagedPostgres != nil
 	status.HasRedis = launchManifest.Plan.Redis.UpstashRedis != nil
 	status.HasSentry = launchManifest.Plan.Sentry
 

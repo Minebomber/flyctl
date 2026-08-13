@@ -179,7 +179,21 @@ func buildManifest(ctx context.Context, parentConfig *appconfig.Config, recovera
 	regionCode, regionExplanation, err := determineRegion(ctx, appConfig, org.Slug, guest, flapsClient)
 	if err != nil {
 		if err := recoverableErrors.tryRecover(err); err != nil {
-			return nil, nil, err
+			// Return a partial manifest so that metrics events
+			// carry org/app context even on early failures.
+			partial := &LaunchManifest{
+				Plan: &plan.LaunchPlan{
+					AppName:       appName,
+					OrgSlug:       org.Slug,
+					RegionCode:    regionCode,
+					FlyctlVersion: buildinfo.Info().Version,
+				},
+			}
+			if srcInfo != nil {
+				partial.Plan.ScannerFamily = srcInfo.Family
+			}
+
+			return partial, nil, err
 		}
 	}
 
@@ -783,13 +797,13 @@ func determineRegion(ctx context.Context, config *appconfig.Config, orgSlug stri
 		Org:                 orgSlug,
 	})
 	if err != nil {
-		return "", recoverableSpecifyInUi, recoverableInUiError{
+		return regionCode, recoverableSpecifyInUi, recoverableInUiError{
 			fmt.Errorf("failed to determine region: %w", err),
 		}
 	}
 
 	if len(placements) == 0 {
-		return "", recoverableSpecifyInUi, recoverableInUiError{
+		return regionCode, recoverableSpecifyInUi, recoverableInUiError{
 			fmt.Errorf("no regions with capacity for the requested configuration"),
 		}
 	}
